@@ -7,6 +7,7 @@ const {
   countSessionMessages,
   selectLatestConversationEntries,
   formatLocalPromptForTelegram,
+  makeLocalMirrorTurn,
   formatSessionPushSummary,
 } = jiti('../index.ts');
 
@@ -61,6 +62,16 @@ test('formatLocalPromptForTelegram mirrors TUI prompt text', () => {
 
 test('formatLocalPromptForTelegram includes image count', () => {
   assert.equal(formatLocalPromptForTelegram('describe this', 2), '🧑 TUI:\ndescribe this\n\n[2 images attached in TUI]');
+});
+
+test('makeLocalMirrorTurn creates an active turn for mirrored TUI prompts', () => {
+  assert.deepEqual(makeLocalMirrorTurn(123, 456), {
+    chatId: 123,
+    replyToMessageId: 456,
+    queuedAttachments: [],
+    content: [],
+    historyText: '(local TUI prompt)',
+  });
 });
 
 test('formatSessionPushSummary aggregates tool calls instead of rendering them as messages', () => {

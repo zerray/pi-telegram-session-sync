@@ -312,6 +312,16 @@ export function formatLocalPromptForTelegram(prompt: string, imageCount = 0): st
 	return `🧑 TUI:\n${text}`;
 }
 
+export function makeLocalMirrorTurn(chatId: number, replyToMessageId: number): ActiveTelegramTurn {
+	return {
+		chatId,
+		replyToMessageId,
+		queuedAttachments: [],
+		content: [],
+		historyText: "(local TUI prompt)",
+	};
+}
+
 export function formatSessionPushSummary(branch: SessionEntry[], allEntries: SessionEntry[] = branch): string {
 	const lines: string[] = [`Current session messages: ${countSessionMessages(allEntries)}`];
 	const conversationLines: string[] = [];
@@ -368,6 +378,7 @@ export default function (pi: ExtensionAPI) {
 	let pollingPromise: Promise<void> | undefined;
 	let queuedTelegramTurns: PendingTelegramTurn[] = [];
 	let activeTelegramTurn: ActiveTelegramTurn | undefined;
+	let pendingLocalMirrorTurn: ActiveTelegramTurn | undefined;
 	let typingInterval: ReturnType<typeof setInterval> | undefined;
 	let currentAbort: (() => void) | undefined;
 	let preserveQueuedTurnsAsHistory = false;
@@ -603,9 +614,10 @@ export default function (pi: ExtensionAPI) {
 	}
 
 	async function mirrorLocalPromptToTelegram(ctx: ExtensionContext, prompt: string, images: ImageContent[] | undefined): Promise<void> {
-		if (!pollingPromise || config.allowedUserId === undefined || isTelegramPrompt(prompt)) return;
+		if (!pollingPromise || config.allowedUserId === undefined || activeTelegramTurn || pendingLocalMirrorTurn || isTelegramPrompt(prompt)) return;
 		try {
-			await sendTextReply(config.allowedUserId, 0, formatLocalPromptForTelegram(prompt, images?.length ?? 0));
+			const messageId = await sendTextReply(config.allowedUserId, 0, formatLocalPromptForTelegram(prompt, images?.length ?? 0));
+			pendingLocalMirrorTurn = makeLocalMirrorTurn(config.allowedUserId, messageId ?? 0);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			updateStatus(ctx, `local prompt mirror failed: ${message}`);
@@ -1131,6 +1143,7 @@ export default function (pi: ExtensionAPI) {
 			await clearPreview(activeTelegramTurn.chatId);
 		}
 		activeTelegramTurn = undefined;
+		pendingLocalMirrorTurn = undefined;
 		currentAbort = undefined;
 		preserveQueuedTurnsAsHistory = false;
 		await stopPolling();
@@ -1151,7 +1164,12 @@ export default function (pi: ExtensionAPI) {
 
 	pi.on("agent_start", async (_event, ctx) => {
 		currentAbort = () => ctx.abort();
-		if (!activeTelegramTurn && queuedTelegramTurns.length > 0) {
+		if (!activeTelegramTurn && pendingLocalMirrorTurn) {
+			activeTelegramTurn = pendingLocalMirrorTurn;
+			pendingLocalMirrorTurn = undefined;
+			previewState = { mode: "message", pendingText: "", lastSentText: "" };
+			startTypingLoop(ctx);
+		} else if (!activeTelegramTurn && queuedTelegramTurns.length > 0) {
 			const nextTurn = queuedTelegramTurns.shift();
 			if (nextTurn) {
 				activeTelegramTurn = { ...nextTurn };
