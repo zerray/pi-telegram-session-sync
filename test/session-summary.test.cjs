@@ -9,6 +9,7 @@ const {
   countSessionMessages,
   selectLatestConversationEntries,
   formatLocalPromptForTelegram,
+  isTelegramDisconnectCommand,
   makeLocalMirrorTurn,
   formatSessionPushSummary,
 } = jiti('../index.ts');
@@ -74,6 +75,15 @@ test('formatLocalPromptForTelegram mirrors TUI prompt text', () => {
 
 test('formatLocalPromptForTelegram includes image count', () => {
   assert.equal(formatLocalPromptForTelegram('describe this', 2), '🧑 TUI:\ndescribe this\n\n[2 images attached in TUI]');
+});
+
+test('isTelegramDisconnectCommand accepts disconnect commands', () => {
+  assert.equal(isTelegramDisconnectCommand('/disconnect'), true);
+  assert.equal(isTelegramDisconnectCommand(' /telegram-disconnect '), true);
+});
+
+test('isTelegramDisconnectCommand rejects normal text', () => {
+  assert.equal(isTelegramDisconnectCommand('please disconnect later'), false);
 });
 
 test('makeLocalMirrorTurn creates an active turn for mirrored TUI prompts', () => {

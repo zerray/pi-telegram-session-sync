@@ -327,6 +327,11 @@ export function formatLocalPromptForTelegram(prompt: string, imageCount = 0): st
 	return `🧑 TUI:\n${text}`;
 }
 
+export function isTelegramDisconnectCommand(text: string): boolean {
+	const command = text.trim().toLowerCase();
+	return command === "/disconnect" || command === "/telegram-disconnect";
+}
+
 export function makeLocalMirrorTurn(chatId: number, replyToMessageId: number): ActiveTelegramTurn {
 	return {
 		chatId,
@@ -794,6 +799,13 @@ export default function (pi: ExtensionAPI) {
 		pollingPromise = undefined;
 	}
 
+	function requestPollingStop(ctx: ExtensionContext): void {
+		stopTypingLoop();
+		pollingController?.abort();
+		pollingController = undefined;
+		updateStatus(ctx);
+	}
+
 	function formatTelegramHistoryText(rawText: string, files: DownloadedTelegramFile[]): string {
 		let summary = rawText.length > 0 ? rawText : "(no text)";
 		if (files.length > 0) {
@@ -861,6 +873,12 @@ export default function (pi: ExtensionAPI) {
 		if (!firstMessage) return;
 		const rawText = messages.map((message) => (message.text || message.caption || "").trim()).find((text) => text.length > 0) || "";
 		const lower = rawText.toLowerCase();
+
+		if (isTelegramDisconnectCommand(rawText)) {
+			await sendTextReply(firstMessage.chat.id, firstMessage.message_id, "Telegram bridge disconnected. Run /telegram-connect in pi to reconnect.");
+			requestPollingStop(ctx);
+			return;
+		}
 
 		if (lower === "stop" || lower === "/stop") {
 			if (currentAbort) {
@@ -945,7 +963,7 @@ export default function (pi: ExtensionAPI) {
 			await sendTextReply(
 				firstMessage.chat.id,
 				firstMessage.message_id,
-				`Send me a message and I will forward it to pi. Commands: /status, /compact, stop.`,
+				`Send me a message and I will forward it to pi. Commands: /status, /compact, /disconnect, stop.`,
 			);
 			if (config.allowedUserId === undefined && firstMessage.from) {
 				config.allowedUserId = firstMessage.from.id;
