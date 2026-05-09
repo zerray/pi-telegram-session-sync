@@ -143,6 +143,7 @@ interface TelegramPreviewState {
 	pendingText: string;
 	lastSentText: string;
 	flushTimer?: ReturnType<typeof setTimeout>;
+	flushPromise?: Promise<void>;
 }
 
 interface TelegramMediaGroupState {
@@ -300,6 +301,15 @@ function textFromSummaryContent(content: unknown): string {
 function countToolCalls(content: unknown): number {
 	if (!Array.isArray(content)) return 0;
 	return content.filter((block) => typeof block === "object" && block !== null && (block as { type?: string }).type === "toolCall").length;
+}
+
+export function formatLocalPromptForTelegram(prompt: string, imageCount = 0): string {
+	let text = prompt.trim();
+	if (!text) text = "(empty prompt)";
+	if (imageCount > 0) {
+		text += `\n\n[${imageCount} image${imageCount === 1 ? "" : "s"} attached in TUI]`;
+	}
+	return `🧑 TUI:\n${text}`;
 }
 
 export function formatSessionPushSummary(branch: SessionEntry[], allEntries: SessionEntry[] = branch): string {
@@ -517,35 +527,38 @@ export default function (pi: ExtensionAPI) {
 	async function flushPreview(chatId: number): Promise<void> {
 		const state = previewState;
 		if (!state) return;
-		state.flushTimer = undefined;
+		while (state.flushPromise) {
+			await state.flushPromise;
+			if (previewState !== state) return;
+		}
+		if (state.flushTimer) {
+			clearTimeout(state.flushTimer);
+			state.flushTimer = undefined;
+		}
 		const text = state.pendingText.trim();
 		if (!text || text === state.lastSentText) return;
 		const truncated = text.length > MAX_MESSAGE_LENGTH ? text.slice(0, MAX_MESSAGE_LENGTH) : text;
 
-		if (draftSupport !== "unsupported") {
-			const draftId = state.draftId ?? allocateDraftId();
-			state.draftId = draftId;
-			try {
-				await callTelegram("sendMessageDraft", { chat_id: chatId, draft_id: draftId, text: truncated });
-				draftSupport = "supported";
-				state.mode = "draft";
+		const flushPromise = (async (): Promise<void> => {
+			if (state.messageId === undefined) {
+				const sent = await callTelegram<TelegramSentMessage>("sendMessage", { chat_id: chatId, text: truncated });
+				state.messageId = sent.message_id;
+				state.mode = "message";
 				state.lastSentText = truncated;
 				return;
-			} catch {
-				draftSupport = "unsupported";
 			}
-		}
-
-		if (state.messageId === undefined) {
-			const sent = await callTelegram<TelegramSentMessage>("sendMessage", { chat_id: chatId, text: truncated });
-			state.messageId = sent.message_id;
+			await callTelegram("editMessageText", { chat_id: chatId, message_id: state.messageId, text: truncated });
 			state.mode = "message";
 			state.lastSentText = truncated;
-			return;
+		})();
+		state.flushPromise = flushPromise;
+		try {
+			await flushPromise;
+		} finally {
+			if (state.flushPromise === flushPromise) {
+				state.flushPromise = undefined;
+			}
 		}
-		await callTelegram("editMessageText", { chat_id: chatId, message_id: state.messageId, text: truncated });
-		state.mode = "message";
-		state.lastSentText = truncated;
 	}
 
 	function schedulePreviewFlush(chatId: number): void {
@@ -587,6 +600,16 @@ export default function (pi: ExtensionAPI) {
 			return;
 		}
 		await sendTextReply(config.allowedUserId, 0, formatSessionPushSummary(ctx.sessionManager.getBranch(), ctx.sessionManager.getEntries()));
+	}
+
+	async function mirrorLocalPromptToTelegram(ctx: ExtensionContext, prompt: string, images: ImageContent[] | undefined): Promise<void> {
+		if (!pollingPromise || config.allowedUserId === undefined || isTelegramPrompt(prompt)) return;
+		try {
+			await sendTextReply(config.allowedUserId, 0, formatLocalPromptForTelegram(prompt, images?.length ?? 0));
+		} catch (error) {
+			const message = error instanceof Error ? error.message : String(error);
+			updateStatus(ctx, `local prompt mirror failed: ${message}`);
+		}
 	}
 
 	async function sendQueuedAttachments(turn: ActiveTelegramTurn): Promise<void> {
@@ -1113,8 +1136,12 @@ export default function (pi: ExtensionAPI) {
 		await stopPolling();
 	});
 
-	pi.on("before_agent_start", async (event) => {
-		const suffix = isTelegramPrompt(event.prompt)
+	pi.on("before_agent_start", async (event, ctx) => {
+		const fromTelegram = isTelegramPrompt(event.prompt);
+		if (!fromTelegram) {
+			await mirrorLocalPromptToTelegram(ctx, event.prompt, event.images);
+		}
+		const suffix = fromTelegram
 			? `${SYSTEM_PROMPT_SUFFIX}\n- The current user message came from Telegram.`
 			: SYSTEM_PROMPT_SUFFIX;
 		return {

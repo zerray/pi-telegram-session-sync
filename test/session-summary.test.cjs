@@ -6,6 +6,7 @@ const jiti = createJiti(__filename);
 const {
   countSessionMessages,
   selectLatestConversationEntries,
+  formatLocalPromptForTelegram,
   formatSessionPushSummary,
 } = jiti('../index.ts');
 
@@ -52,6 +53,14 @@ test('formatSessionPushSummary includes total message count and latest conversat
     messageEntry('a2', 'assistant', [{ type: 'text', text: 'new answer' }]),
   ];
   assert.equal(formatSessionPushSummary(entries), 'Current session messages: 4\n\n🧑 User:\nnew question\n\n🤖 pi:\nnew answer');
+});
+
+test('formatLocalPromptForTelegram mirrors TUI prompt text', () => {
+  assert.equal(formatLocalPromptForTelegram('hello'), '🧑 TUI:\nhello');
+});
+
+test('formatLocalPromptForTelegram includes image count', () => {
+  assert.equal(formatLocalPromptForTelegram('describe this', 2), '🧑 TUI:\ndescribe this\n\n[2 images attached in TUI]');
 });
 
 test('formatSessionPushSummary aggregates tool calls instead of rendering them as messages', () => {
