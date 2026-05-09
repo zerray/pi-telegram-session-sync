@@ -138,8 +138,7 @@ interface QueuedAttachment {
 }
 
 interface TelegramPreviewState {
-	mode: "draft" | "message";
-	draftId?: number;
+	mode: "message";
 	messageId?: number;
 	pendingText: string;
 	lastSentText: string;
@@ -267,6 +266,75 @@ function chunkParagraphs(text: string): string[] {
 	}
 	flushCurrent();
 	return chunks;
+}
+
+export function countSessionMessages(entries: SessionEntry[]): number {
+	return entries.filter((entry) => entry.type === "message").length;
+}
+
+export function selectLatestConversationEntries(branch: SessionEntry[]): SessionEntry[] {
+	for (let index = branch.length - 1; index >= 0; index--) {
+		const entry = branch[index];
+		if (entry?.type !== "message") continue;
+		const role = (entry.message as unknown as { role?: string }).role;
+		if (role === "user") return branch.slice(index);
+	}
+	return branch.length > 0 ? [branch[branch.length - 1] as SessionEntry] : [];
+}
+
+function textFromSummaryContent(content: unknown): string {
+	if (typeof content === "string") return content.trim();
+	if (!Array.isArray(content)) return "";
+	return content
+		.filter((block): block is { type?: string; text?: string } => typeof block === "object" && block !== null)
+		.map((block) => {
+			if (block.type === "text" && typeof block.text === "string") return block.text;
+			if (block.type === "image") return "[image]";
+			return "";
+		})
+		.filter(Boolean)
+		.join("\n")
+		.trim();
+}
+
+function countToolCalls(content: unknown): number {
+	if (!Array.isArray(content)) return 0;
+	return content.filter((block) => typeof block === "object" && block !== null && (block as { type?: string }).type === "toolCall").length;
+}
+
+export function formatSessionPushSummary(branch: SessionEntry[], allEntries: SessionEntry[] = branch): string {
+	const lines: string[] = [`Current session messages: ${countSessionMessages(allEntries)}`];
+	const conversationLines: string[] = [];
+	let pendingToolCallCount = 0;
+
+	const flushToolCallCount = (): void => {
+		if (pendingToolCallCount === 0) return;
+		conversationLines.push(`${pendingToolCallCount} ${pendingToolCallCount === 1 ? "time" : "times"} tool called`);
+		pendingToolCallCount = 0;
+	};
+
+	for (const entry of selectLatestConversationEntries(branch)) {
+		if (entry.type !== "message") continue;
+		const message = entry.message as unknown as { role?: string; content?: unknown };
+		if (message.role === "user") {
+			flushToolCallCount();
+			const text = textFromSummaryContent(message.content);
+			if (text) conversationLines.push(`🧑 User:\n${text}`);
+			continue;
+		}
+		if (message.role !== "assistant") continue;
+		const text = textFromSummaryContent(message.content);
+		const toolCallCount = countToolCalls(message.content);
+		if (text) {
+			flushToolCallCount();
+			conversationLines.push(`🤖 pi:\n${text}`);
+		}
+		pendingToolCallCount += toolCallCount;
+	}
+	flushToolCallCount();
+
+	if (conversationLines.length > 0) lines.push(conversationLines.join("\n\n"));
+	return lines.join("\n\n");
 }
 
 async function readConfig(): Promise<TelegramConfig> {
@@ -496,11 +564,6 @@ export default function (pi: ExtensionAPI) {
 			await clearPreview(chatId);
 			return false;
 		}
-		if (state.mode === "draft") {
-			await callTelegram<TelegramSentMessage>("sendMessage", { chat_id: chatId, text: finalText });
-			await clearPreview(chatId);
-			return true;
-		}
 		previewState = undefined;
 		return state.messageId !== undefined;
 	}
@@ -516,6 +579,14 @@ export default function (pi: ExtensionAPI) {
 			lastMessageId = sent.message_id;
 		}
 		return lastMessageId;
+	}
+
+	async function sendManualConnectSessionPush(ctx: ExtensionContext): Promise<void> {
+		if (config.allowedUserId === undefined) {
+			ctx.ui.notify("Telegram is connected, but no paired chat is known yet. Send /start to the bot first.", "warning");
+			return;
+		}
+		await sendTextReply(config.allowedUserId, 0, formatSessionPushSummary(ctx.sessionManager.getBranch(), ctx.sessionManager.getEntries()));
 	}
 
 	async function sendQueuedAttachments(turn: ActiveTelegramTurn): Promise<void> {
@@ -1009,6 +1080,7 @@ export default function (pi: ExtensionAPI) {
 			}
 			await startPolling(ctx);
 			updateStatus(ctx);
+			await sendManualConnectSessionPush(ctx);
 		},
 	});
 
