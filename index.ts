@@ -22,6 +22,21 @@ interface TelegramApiResponse<T> {
 	error_code?: number;
 }
 
+export class TelegramApiError extends Error {
+	constructor(
+		readonly method: string,
+		readonly errorCode: number | undefined,
+		message: string,
+	) {
+		super(message);
+		this.name = "TelegramApiError";
+	}
+}
+
+export function isTelegramGetUpdatesConflict(error: unknown): boolean {
+	return error instanceof TelegramApiError && error.method === "getUpdates" && error.errorCode === 409;
+}
+
 interface TelegramUser {
 	id: number;
 	is_bot: boolean;
@@ -432,9 +447,9 @@ export default function (pi: ExtensionAPI) {
 			body: JSON.stringify(body),
 			signal: options?.signal,
 		});
-			const data = (await response.json()) as TelegramApiResponse<TResponse>;
+		const data = (await response.json()) as TelegramApiResponse<TResponse>;
 		if (!data.ok || data.result === undefined) {
-			throw new Error(data.description || `Telegram API ${method} failed`);
+			throw new TelegramApiError(method, data.error_code, data.description || `Telegram API ${method} failed`);
 		}
 		return data.result;
 	}
@@ -461,7 +476,7 @@ export default function (pi: ExtensionAPI) {
 		});
 		const data = (await response.json()) as TelegramApiResponse<TResponse>;
 		if (!data.ok || data.result === undefined) {
-			throw new Error(data.description || `Telegram API ${method} failed`);
+			throw new TelegramApiError(method, data.error_code, data.description || `Telegram API ${method} failed`);
 		}
 		return data.result;
 	}
@@ -1031,6 +1046,12 @@ export default function (pi: ExtensionAPI) {
 			} catch (error) {
 				if (signal.aborted) return;
 				if (error instanceof DOMException && error.name === "AbortError") return;
+				if (isTelegramGetUpdatesConflict(error)) {
+					const message = "Telegram polling stopped: another active getUpdates connection took over this bot.";
+					updateStatus(ctx, "active connection exists");
+					ctx.ui.notify(message, "error");
+					return;
+				}
 				const message = error instanceof Error ? error.message : String(error);
 				updateStatus(ctx, message);
 				await new Promise((resolve) => setTimeout(resolve, 3000));

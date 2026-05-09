@@ -4,6 +4,8 @@ const { createJiti } = require('jiti');
 const jiti = createJiti(__filename);
 
 const {
+  TelegramApiError,
+  isTelegramGetUpdatesConflict,
   countSessionMessages,
   selectLatestConversationEntries,
   formatLocalPromptForTelegram,
@@ -24,6 +26,16 @@ function messageEntry(id, role, content) {
 function customEntry(id) {
   return { type: 'custom', id, parentId: null, timestamp: new Date(0).toISOString(), customType: 'x' };
 }
+
+test('isTelegramGetUpdatesConflict identifies getUpdates 409 errors', () => {
+  assert.equal(isTelegramGetUpdatesConflict(new TelegramApiError('getUpdates', 409, 'conflict')), true);
+});
+
+test('isTelegramGetUpdatesConflict rejects other Telegram errors', () => {
+  assert.equal(isTelegramGetUpdatesConflict(new TelegramApiError('sendMessage', 409, 'conflict')), false);
+  assert.equal(isTelegramGetUpdatesConflict(new TelegramApiError('getUpdates', 500, 'server error')), false);
+  assert.equal(isTelegramGetUpdatesConflict(new Error('conflict')), false);
+});
 
 test('countSessionMessages counts only message entries', () => {
   const entries = [messageEntry('u1', 'user', 'hello'), customEntry('c1'), messageEntry('a1', 'assistant', [])];
