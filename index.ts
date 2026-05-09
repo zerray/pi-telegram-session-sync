@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 
 import type { ImageContent, TextContent } from "@mariozechner/pi-ai";
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, SessionEntry } from "@mariozechner/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 
 interface TelegramConfig {
@@ -172,7 +172,6 @@ const TELEGRAM_PREFIX = "[telegram]";
 const MAX_MESSAGE_LENGTH = 4096;
 const MAX_ATTACHMENTS_PER_TURN = 10;
 const PREVIEW_THROTTLE_MS = 750;
-const TELEGRAM_DRAFT_ID_MAX = 2_147_483_647;
 const TELEGRAM_MEDIA_GROUP_DEBOUNCE_MS = 1200;
 
 const SYSTEM_PROMPT_SUFFIX = `
@@ -404,14 +403,7 @@ export default function (pi: ExtensionAPI) {
 	let preserveQueuedTurnsAsHistory = false;
 	let setupInProgress = false;
 	let previewState: TelegramPreviewState | undefined;
-	let draftSupport: "unknown" | "supported" | "unsupported" = "unknown";
-	let nextDraftId = 0;
 	const mediaGroups = new Map<string, TelegramMediaGroupState>();
-
-	function allocateDraftId(): number {
-		nextDraftId = nextDraftId >= TELEGRAM_DRAFT_ID_MAX ? 1 : nextDraftId + 1;
-		return nextDraftId;
-	}
 
 	function updateStatus(ctx: ExtensionContext, error?: string): void {
 		const theme = ctx.ui.theme;
@@ -546,13 +538,6 @@ export default function (pi: ExtensionAPI) {
 			state.flushTimer = undefined;
 		}
 		previewState = undefined;
-		if (state.mode === "draft" && state.draftId !== undefined) {
-			try {
-				await callTelegram("sendMessageDraft", { chat_id: chatId, draft_id: state.draftId, text: "" });
-			} catch {
-				// ignore
-			}
-		}
 	}
 
 	async function flushPreview(chatId: number): Promise<void> {
@@ -1212,7 +1197,7 @@ export default function (pi: ExtensionAPI) {
 			const nextTurn = queuedTelegramTurns.shift();
 			if (nextTurn) {
 				activeTelegramTurn = { ...nextTurn };
-				previewState = { mode: draftSupport === "unsupported" ? "message" : "draft", pendingText: "", lastSentText: "" };
+				previewState = { mode: "message", pendingText: "", lastSentText: "" };
 				startTypingLoop(ctx);
 			}
 		}
@@ -1224,13 +1209,13 @@ export default function (pi: ExtensionAPI) {
 		if (previewState && (previewState.pendingText.trim().length > 0 || previewState.lastSentText.trim().length > 0)) {
 			await finalizePreview(activeTelegramTurn.chatId);
 		}
-		previewState = { mode: draftSupport === "unsupported" ? "message" : "draft", pendingText: "", lastSentText: "" };
+		previewState = { mode: "message", pendingText: "", lastSentText: "" };
 	});
 
 	pi.on("message_update", async (event, _ctx) => {
 		if (!activeTelegramTurn || !isAssistantMessage(event.message)) return;
 		if (!previewState) {
-			previewState = { mode: draftSupport === "unsupported" ? "message" : "draft", pendingText: "", lastSentText: "" };
+			previewState = { mode: "message", pendingText: "", lastSentText: "" };
 		}
 		previewState.pendingText = getMessageText(event.message);
 		schedulePreviewFlush(activeTelegramTurn.chatId);

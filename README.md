@@ -1,23 +1,21 @@
-# pi-telegram
+# pi-telegram-session-sync
 
-![pi-telegram screenshot](screenshot.png)
+Telegram DM bridge for pi with session summary sync and TUI mirroring.
 
-> Full pi build session: [View the session transcript](https://pi.dev/session/#14acfe07b7844c8abec55ed9fbddc17f), which captures the full pi session in which `pi-telegram` was built.
-
-Telegram DM bridge for pi.
+Fork of [`badlogic/pi-telegram`](https://github.com/badlogic/pi-telegram). This version keeps the upstream DM bridge behavior and adds session-aware connect summaries, TUI prompt/reply mirroring, Telegram-side disconnect, and new-connection ownership.
 
 ## Install
 
 From git:
 
 ```bash
-pi install git:github.com/badlogic/pi-telegram
+pi install git:github.com/zerray/pi-telegram-session-sync
 ```
 
 Or for a single run:
 
 ```bash
-pi -e git:github.com/badlogic/pi-telegram
+pi -e git:github.com/zerray/pi-telegram-session-sync
 ```
 
 ## Configure
@@ -47,11 +45,21 @@ The extension stores config in:
 
 ## Connect a pi session
 
-The Telegram bridge is session-local. Connect it only in the pi session that should own the bot:
+Connect the current pi session:
 
 ```bash
 /telegram-connect
 ```
+
+Manual connect always pushes a Telegram summary containing:
+
+- current session message count
+- latest conversation on the current branch
+- aggregated tool calls, e.g. `3 times tool called`
+
+Automatic network reconnects do not send this summary.
+
+If another pi session is already connected to the bot, the new connection takes ownership and the old polling client stops after Telegram returns a `getUpdates` conflict.
 
 To stop polling in the current session:
 
@@ -81,6 +89,10 @@ Chat with your bot in Telegram DMs.
 ### Send text
 
 Send any message in the bot DM. It is forwarded into pi with a `[telegram]` prefix.
+
+### Mirror TUI messages
+
+Prompts typed in the pi TUI are mirrored to Telegram, and the assistant reply for that turn is streamed back to Telegram.
 
 ### Send images and files
 
@@ -117,6 +129,22 @@ or:
 
 That aborts the active pi turn.
 
+### Disconnect from Telegram
+
+In Telegram, send:
+
+```text
+/disconnect
+```
+
+or:
+
+```text
+/telegram-disconnect
+```
+
+That stops polling in the connected pi session. Reconnect from pi with `/telegram-connect`.
+
 ### Queue follow-ups
 
 If you send more Telegram messages while pi is busy, they are queued and processed in order.
@@ -125,11 +153,10 @@ If you send more Telegram messages while pi is busy, they are queued and process
 
 The extension streams assistant text previews back to Telegram while pi is generating.
 
-It tries Telegram draft streaming first with `sendMessageDraft`. If that is not supported for your bot, it falls back to `sendMessage` plus `editMessageText`.
+This fork disables Telegram draft streaming and uses normal `sendMessage` plus `editMessageText` previews.
 
 ## Notes
 
-- Only one pi session should be connected to the bot at a time
 - Replies are sent as normal Telegram messages, not quote-replies
 - Long replies are split below Telegram's 4096 character limit
 - Outbound files are sent via `telegram_attach`
